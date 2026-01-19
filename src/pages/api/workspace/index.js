@@ -10,12 +10,21 @@ const handler = async (req, res) => {
   const { method } = req;
 
   if (method === 'POST') {
-    const session = await validateSession(req, res);
-    await validateCreateWorkspace(req, res);
-    const { name } = req.body;
-    let slug = slugify(name.toLowerCase());
-    await createWorkspace(session.user.userId, session.user.email, name, slug);
-    res.status(200).json({ data: { name, slug } });
+    try {
+      const session = await validateSession(req, res);
+      await validateCreateWorkspace(req, res);
+      const { name } = req.body;
+      let slug = slugify(name.toLowerCase());
+
+      await createWorkspace(session.user.userId, session.user.email, name, slug);
+
+      res.status(200).json({ data: { name, slug } });
+    } catch (error) {
+      
+      if (!res.headersSent) {
+        res.status(500).json({ errors: { error: { msg: error.message || 'Failed to create workspace' } } });
+      }
+    }
   } else {
     res
       .status(405)

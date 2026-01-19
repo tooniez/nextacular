@@ -34,6 +34,14 @@ Card.Empty = ({ children }) => {
   );
 };
 
+Card.Header = ({ children, className = '' }) => {
+  return (
+    <div className={`flex flex-row items-center justify-between px-5 py-3 rounded-t ${className}`}>
+      {children}
+    </div>
+  );
+};
+
 Card.Footer = ({ children }) => {
   return (
     <div className="flex flex-row items-center justify-between px-5 py-3 space-x-5 bg-gray-100 border-t rounded-b dark:border-t-gray-600 dark:bg-gray-900">
@@ -44,6 +52,7 @@ Card.Footer = ({ children }) => {
 
 Card.Body.displayName = 'Body';
 Card.Empty.displayName = 'Empty';
+Card.Header.displayName = 'Header';
 Card.Footer.displayName = 'Footer';
 
 export default Card;
