@@ -1,0 +1,79 @@
+/**
+ * Super Admin Authorization
+ * Verifies user has SUPER_ADMIN role
+ * 
+ * NOTE: For now, uses env var SUPER_ADMIN_EMAILS
+ * In production, use GlobalRole enum or UserGlobalRole table
+ */
+
+import { validateSession } from '@/config/api-validation';
+
+/**
+ * Require Super Admin access
+ * @param {object} req - Next.js request
+ * @param {object} res - Next.js response
+ * @returns {Promise<object|null>} Session if authorized, null otherwise
+ */
+export async function requireSuperAdmin(req, res) {
+  // Check if response already sent (to avoid "headers already sent" errors)
+  if (res.headersSent) {
+    return null;
+  }
+
+  try {
+    const session = await validateSession(req, res);
+    
+    // If validateSession sent a response (401/403), it returns null or throws
+    // Check headers to see if response was sent
+    if (res.headersSent || !session || !session.user || !session.user.email) {
+      return null;
+    }
+
+    // Option 1: Check env var (quick implementation)
+    const superAdminEmails = process.env.SUPER_ADMIN_EMAILS?.split(',').map(e => e.trim()) || [];
+    
+    if (superAdminEmails.includes(session.user.email)) {
+      return session;
+    }
+
+    // Option 2: Check if user has SUPER_ADMIN role in any workspace (temporary)
+    // TODO: Implement GlobalRole enum or UserGlobalRole table
+    
+    return null;
+  } catch (error) {
+    // If validateSession threw an error and sent a response, return null
+    if (res.headersSent || error.responseSent) {
+      return null;
+    }
+    // Re-throw if no response was sent
+    throw error;
+  }
+}
+
+/**
+ * Verify Super Admin and throw if not authorized
+ * @param {object} req - Next.js request
+ * @param {object} res - Next.js response
+ * @returns {Promise<object>} Session
+ * @throws {Error} If not authorized
+ */
+export async function verifySuperAdmin(req, res) {
+  // Check if response already sent
+  if (res.headersSent) {
+    return null;
+  }
+
+  const session = await requireSuperAdmin(req, res);
+  
+  if (!session) {
+    // If requireSuperAdmin already sent a response (via validateSession), don't send another
+    if (!res.headersSent) {
+      res.status(403).json({
+        errors: { auth: { msg: 'Unauthorized: Super Admin access required' } },
+      });
+    }
+    return null;
+  }
+  
+  return session;
+}

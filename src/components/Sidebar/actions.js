@@ -17,7 +17,7 @@ import { useTranslation } from "react-i18next";
 
 const Actions = () => {
   const { t } = useTranslation();
-  const { data, isLoading } = useWorkspaces();
+  const { data, isLoading, mutate } = useWorkspaces();
   const { workspace, setWorkspace } = useWorkspace();
   const router = useRouter();
   const [isSubmitting, setSubmittingState] = useState(false);
@@ -25,25 +25,37 @@ const Actions = () => {
   const [showModal, setModalState] = useState(false);
   const validName = name.length > 0 && name.length <= 16;
 
-  const createWorkspace = (event) => {
+  const createWorkspace = async (event) => {
     event.preventDefault();
     setSubmittingState(true);
-    api('/api/workspace', {
-      body: { name },
-      method: 'POST',
-    }).then((response) => {
+    
+    try {
+      const response = await api('/api/workspace', {
+        body: { name },
+        method: 'POST',
+      });
+
       setSubmittingState(false);
 
       if (response.errors) {
         Object.keys(response.errors).forEach((error) =>
           toast.error(response.errors[error].msg)
         );
+      } else if (response.status >= 400) {
+        toast.error(response.error?.msg || 'Failed to create workspace');
       } else {
         toggleModal();
         setName('');
         toast.success('Workspace successfully created!');
+        // Refresh workspaces list
+        if (mutate) {
+          mutate();
+        }
       }
-    });
+    } catch (error) {
+      setSubmittingState(false);
+      toast.error(error.message || 'Failed to create workspace');
+    }
   };
 
   const handleNameChange = (event) => setName(event.target.value);

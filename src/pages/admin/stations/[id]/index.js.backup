@@ -1,0 +1,2168 @@
+/**
+ * Super Admin Station Edit Page
+ * Complete station management with 7 tabs:
+ * 1. Ubicazione (Location)
+ * 2. Dati OCPP (OCPP Data)
+ * 3. Connettori (Connectors)
+ * 4. Mappa (Map)
+ * 5. QR Code
+ * 6. Logo e Foto (Logo and Photo)
+ * 7. White List
+ */
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
+import Link from 'next/link';
+import AccountLayout from '@/layouts/AccountLayout';
+import Meta from '@/components/Meta/index';
+import Card from '@/components/Card/index';
+import Button from '@/components/Button/index';
+import { useSuperAdmin } from '@/hooks/data/useSuperAdmin';
+import useSWR from 'swr';
+import { format } from 'date-fns';
+import { it } from 'date-fns/locale';
+import toast from 'react-hot-toast';
+import {
+  ArrowLeftIcon,
+  BoltIcon,
+  MapPinIcon,
+  QrCodeIcon,
+  PhotoIcon,
+  UserGroupIcon,
+  TrashIcon,
+  PencilIcon,
+  ArrowDownTrayIcon,
+  PlusIcon,
+  XMarkIcon,
+  MagnifyingGlassIcon,
+} from '@heroicons/react/24/outline';
+
+const fetcher = (url) => fetch(url).then((res) => res.json());
+
+export default function AdminStationEditPage() {
+  const { isSuperAdmin, isLoading: isAuthLoading } = useSuperAdmin();
+  const router = useRouter();
+  const { id } = router.query;
+
+  const [activeTab, setActiveTab] = useState('ubicazione');
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Form state - MUST be before any conditional returns
+  const [formData, setFormData] = useState({
+    // Ubicazione tab
+    name: '',
+    address: '',
+    comune: '',
+    cap: '',
+    provincia: '',
+    stato: 'Italia',
+    latitude: '',
+    longitude: '',
+    accessibility: 'Accesso Gratuito al Pubblico',
+    installationLocation: 'Sulla Strada',
+    additionalInfo: '',
+    isActive: true,
+    isPublic: true,
+    isReservable: true,
+    workspaceId: '',
+    referente: '',
+    referenteEmail: '',
+    referenteTelefono: '',
+    referenteCellulare: '',
+    installationDate: '',
+    installer: 'Non Specificato',
+    monthlyPlatformCost: 10,
+    costPerCharge: 0,
+    energyCostPerKwh: 0,
+    open24Hours: true,
+    notes: '',
+    // Dati OCPP tab
+    ocppId: '',
+    serialNumber: '',
+    meterSerialNumber: '',
+    lastInfo: '',
+    registrationStatus: 'Accettata',
+    stationSerialNumber: '',
+    lastError: 'NoError',
+    stationStatus: 'Disponibile',
+    vendor: '',
+    iccId: '',
+    connectionInterval: 900,
+    connectionIntervalUnit: 'S.',
+    product: 'Non Specificato',
+    lastHeartbeat: '',
+    model: '',
+    imsi: '',
+    connectionStatus: 'Connessa',
+    connectionDate: '',
+    connectionReason: '',
+    remoteIp: '',
+    ocppVersion: '',
+  });
+
+  // Fetch station data
+  const { data: stationData, error: stationError, mutate: mutateStation } = useSWR(
+    isSuperAdmin && id ? `/api/admin/stations/${id}` : null,
+    fetcher
+  );
+
+  // Fetch workspaces for organization selector
+  const { data: workspacesData } = useSWR(
+    isSuperAdmin ? '/api/admin/workspaces?page=1&pageSize=100' : null,
+    fetcher
+  );
+
+  useEffect(() => {
+    if (!isAuthLoading && !isSuperAdmin) {
+      router.push('/account');
+    }
+  }, [isSuperAdmin, isAuthLoading, router]);
+
+  useEffect(() => {
+    if (stationData?.data) {
+      const station = stationData.data;
+      setFormData((prev) => ({
+        ...prev,
+        name: station.name || '',
+        address: station.location || '',
+        latitude: station.latitude?.toString() || '',
+        longitude: station.longitude?.toString() || '',
+        ocppId: station.ocppId || '',
+        vendor: station.vendor || '',
+        model: station.model || '',
+        firmwareVersion: station.firmwareVersion || '',
+        stationStatus: station.status || 'Disponibile',
+        registrationStatus: station.status === 'AVAILABLE' || station.status === 'CHARGING' ? 'Accettata' : 'Non Accettata',
+        lastHeartbeat: station.lastHeartbeat
+          ? format(new Date(station.lastHeartbeat), 'dd/MM/yyyy HH:mm:ss', { locale: it })
+          : '',
+        workspaceId: station.workspaceId || '',
+        isActive: station.status !== 'OFFLINE' && station.status !== 'UNAVAILABLE',
+        ocppVersion: station.ocppVersion || '',
+      }));
+    }
+  }, [stationData]);
+
+  const handleInputChange = (field, value) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const response = await fetch(`/api/admin/stations/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: formData.name,
+          location: formData.address,
+          latitude: formData.latitude ? parseFloat(formData.latitude) : null,
+          longitude: formData.longitude ? parseFloat(formData.longitude) : null,
+          status: formData.stationStatus,
+          ocppVersion: stationData?.data?.ocppVersion,
+          vendor: formData.vendor,
+          model: formData.model,
+          firmwareVersion: formData.firmwareVersion,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.errors) {
+        Object.keys(result.errors).forEach((error) =>
+          toast.error(result.errors[error].msg)
+        );
+      } else {
+        toast.success('Stazione aggiornata con successo');
+        mutateStation();
+      }
+    } catch (error) {
+      toast.error('Errore durante il salvataggio');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm('Sei sicuro di voler cancellare questa stazione? Questa azione non può essere annullata.')) {
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      const response = await fetch(`/api/admin/stations/${id}`, {
+        method: 'DELETE',
+      });
+
+      const result = await response.json();
+
+      if (result.errors) {
+        Object.keys(result.errors).forEach((error) =>
+          toast.error(result.errors[error].msg)
+        );
+      } else {
+        toast.success('Stazione cancellata con successo');
+        router.push('/admin/stations');
+      }
+    } catch (error) {
+      toast.error('Errore durante la cancellazione');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const formatDateTime = (date) => {
+    if (!date) return 'N/A';
+    try {
+      return format(new Date(date), 'dd/MM/yyyy HH:mm', { locale: it });
+    } catch {
+      return 'N/A';
+    }
+  };
+
+  if (isAuthLoading) {
+    return (
+      <AccountLayout>
+        <Meta title="Caricamento..." />
+        <div className="p-6">Caricamento...</div>
+      </AccountLayout>
+    );
+  }
+
+  if (!isSuperAdmin) {
+    return null;
+  }
+
+  if (stationError) {
+    return (
+      <AccountLayout>
+        <Meta title="Errore" />
+        <div className="p-6">
+          <Card>
+            <Card.Body>
+              <p className="text-red-600">Errore nel caricamento della stazione</p>
+            </Card.Body>
+          </Card>
+        </div>
+      </AccountLayout>
+    );
+  }
+
+  const station = stationData?.data;
+  const workspaces = workspacesData?.data?.data || [];
+
+  return (
+    <AccountLayout>
+      <Meta title={`Modifica Stazione ${station?.ocppId || ''} - Super Admin`} />
+      <div className="p-6">
+        {/* Header */}
+        <div className="flex items-center gap-4 mb-6">
+          <Link
+            href="/admin/stations"
+            className="p-2 hover:bg-gray-100 rounded"
+          >
+            <ArrowLeftIcon className="w-6 h-6 text-gray-600" />
+          </Link>
+          <div className="flex items-center gap-3">
+            <BoltIcon className="w-8 h-8 text-blue-600" />
+            <h1 className="text-3xl font-bold text-gray-900">
+              Modifica Stazione {station?.ocppId ? `(${station.ocppId})` : ''}
+            </h1>
+          </div>
+          <div className="ml-auto">
+            <Button
+              onClick={handleSave}
+              disabled={isSaving}
+              className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+            >
+              {isSaving ? 'Salvataggio...' : 'Salva'}
+            </Button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="border-b border-gray-200 mb-6">
+          <nav className="flex space-x-8">
+            <button
+              onClick={() => setActiveTab('ubicazione')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'ubicazione'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Ubicazione
+            </button>
+            <button
+              onClick={() => setActiveTab('dati-ocpp')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'dati-ocpp'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Dati OCPP
+            </button>
+            <button
+              onClick={() => setActiveTab('connettori')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'connettori'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Connettori
+            </button>
+            <button
+              onClick={() => setActiveTab('mappa')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'mappa'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Mappa
+            </button>
+            <button
+              onClick={() => setActiveTab('qr-code')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'qr-code'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              QR Code
+            </button>
+            <button
+              onClick={() => setActiveTab('logo-foto')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'logo-foto'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Logo e Foto
+            </button>
+            <button
+              onClick={() => setActiveTab('white-list')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'white-list'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              White List
+            </button>
+          </nav>
+        </div>
+
+        {/* Tab Content */}
+        {!station ? (
+          <Card>
+            <Card.Body>
+              <div className="p-8 text-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+                <p className="mt-4 text-gray-600">Caricamento dettagli stazione...</p>
+              </div>
+            </Card.Body>
+          </Card>
+        ) : (
+          <>
+            {/* Tab: Ubicazione */}
+            {activeTab === 'ubicazione' && (
+              <UbicazioneTab
+                formData={formData}
+                handleInputChange={handleInputChange}
+                workspaces={workspaces}
+                station={station}
+              />
+            )}
+
+            {/* Tab: Dati OCPP */}
+            {activeTab === 'dati-ocpp' && (
+              <DatiOcppTab
+                formData={formData}
+                handleInputChange={handleInputChange}
+                station={station}
+              />
+            )}
+
+            {/* Tab: Connettori */}
+            {activeTab === 'connettori' && (
+              <ConnettoriTab stationId={id} station={station} mutateStation={mutateStation} />
+            )}
+
+            {/* Tab: Mappa */}
+            {activeTab === 'mappa' && (
+              <MappaTab station={station} formData={formData} />
+            )}
+
+            {/* Tab: QR Code */}
+            {activeTab === 'qr-code' && (
+              <QrCodeTab station={station} />
+            )}
+
+            {/* Tab: Logo e Foto */}
+            {activeTab === 'logo-foto' && (
+              <LogoFotoTab station={station} />
+            )}
+
+            {/* Tab: White List */}
+            {activeTab === 'white-list' && (
+              <WhiteListTab stationId={id} />
+            )}
+          </>
+        )}
+      </div>
+    </AccountLayout>
+  );
+}
+
+// Ubicazione Tab Component
+function UbicazioneTab({ formData, handleInputChange, workspaces, station }) {
+  return (
+    <Card>
+      <Card.Body>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Left Column */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Etichetta <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.name}
+                onChange={(e) => handleInputChange('name', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Indirizzo <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.address}
+                onChange={(e) => handleInputChange('address', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Comune <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.comune}
+                onChange={(e) => handleInputChange('comune', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                CAP <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.cap}
+                onChange={(e) => handleInputChange('cap', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Provincia <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.provincia}
+                onChange={(e) => handleInputChange('provincia', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Stato <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={formData.stato}
+                onChange={(e) => handleInputChange('stato', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+                required
+              >
+                <option value="Italia">Italia</option>
+                <option value="Altro">Altro</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Latitudine
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={formData.latitude}
+                  onChange={(e) => handleInputChange('latitude', e.target.value)}
+                  className="w-full px-4 py-2 border rounded"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Longitudine
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={formData.longitude}
+                  onChange={(e) => handleInputChange('longitude', e.target.value)}
+                  className="w-full px-4 py-2 border rounded"
+                />
+              </div>
+            </div>
+
+            <div>
+              <button
+                type="button"
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                Q Coordinate
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Accessibilità
+              </label>
+              <select
+                value={formData.accessibility}
+                onChange={(e) => handleInputChange('accessibility', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              >
+                <option value="Accesso Gratuito al Pubblico">Accesso Gratuito al Pubblico</option>
+                <option value="Accesso Limitato">Accesso Limitato</option>
+                <option value="Accesso Privato">Accesso Privato</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Luogo di Installazione
+              </label>
+              <select
+                value={formData.installationLocation}
+                onChange={(e) => handleInputChange('installationLocation', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              >
+                <option value="Sulla Strada">Sulla Strada</option>
+                <option value="Parcheggio Pubblico">Parcheggio Pubblico</option>
+                <option value="Parcheggio Privato">Parcheggio Privato</option>
+                <option value="Area Commerciale">Area Commerciale</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Informazioni Addizionali (x Clienti)
+              </label>
+              <input
+                type="text"
+                value={formData.additionalInfo}
+                onChange={(e) => handleInputChange('additionalInfo', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+          </div>
+
+          {/* Right Column */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Stazione Attiva
+              </label>
+              <select
+                value={formData.isActive ? 'Si' : 'No'}
+                onChange={(e) => handleInputChange('isActive', e.target.value === 'Si')}
+                className="w-full px-4 py-2 border rounded"
+              >
+                <option value="Si">Si</option>
+                <option value="No">No</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Pubblica
+              </label>
+              <select
+                value={formData.isPublic ? 'Si' : 'No'}
+                onChange={(e) => handleInputChange('isPublic', e.target.value === 'Si')}
+                className="w-full px-4 py-2 border rounded"
+              >
+                <option value="Si">Si</option>
+                <option value="No">No</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Prenotabile
+              </label>
+              <select
+                value={formData.isReservable ? 'Si' : 'No'}
+                onChange={(e) => handleInputChange('isReservable', e.target.value === 'Si')}
+                className="w-full px-4 py-2 border rounded"
+              >
+                <option value="Si">Si</option>
+                <option value="No">No</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Organizzazione
+              </label>
+              <select
+                value={formData.workspaceId}
+                onChange={(e) => handleInputChange('workspaceId', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              >
+                <option value="">Seleziona...</option>
+                {workspaces.map((ws) => (
+                  <option key={ws.id} value={ws.id}>
+                    {ws.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Referente
+              </label>
+              <input
+                type="text"
+                value={formData.referente}
+                onChange={(e) => handleInputChange('referente', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                E-Mail Referente
+              </label>
+              <input
+                type="email"
+                value={formData.referenteEmail}
+                onChange={(e) => handleInputChange('referenteEmail', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Telefono Referente
+              </label>
+              <input
+                type="tel"
+                value={formData.referenteTelefono}
+                onChange={(e) => handleInputChange('referenteTelefono', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+                placeholder="Telefono Referente..."
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Cellulare Referente
+              </label>
+              <input
+                type="tel"
+                value={formData.referenteCellulare}
+                onChange={(e) => handleInputChange('referenteCellulare', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Data Installazione
+              </label>
+              <input
+                type="date"
+                value={formData.installationDate}
+                onChange={(e) => handleInputChange('installationDate', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Installatore
+              </label>
+              <select
+                value={formData.installer}
+                onChange={(e) => handleInputChange('installer', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              >
+                <option value="Non Specificato">Non Specificato</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Costo Mensile Piattaforma
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-3 text-gray-500">€.</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={formData.monthlyPlatformCost}
+                  onChange={(e) => handleInputChange('monthlyPlatformCost', e.target.value)}
+                  className="w-full pl-8 pr-4 py-2 border rounded"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Costo su Ricarica
+              </label>
+              <div className="relative">
+                <span className="absolute right-3 top-3 text-gray-500">%</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={formData.costPerCharge}
+                  onChange={(e) => handleInputChange('costPerCharge', e.target.value)}
+                  className="w-full px-4 py-2 border rounded"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Costo Energia per kWh
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-3 text-gray-500">€.</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={formData.energyCostPerKwh}
+                  onChange={(e) => handleInputChange('energyCostPerKwh', e.target.value)}
+                  className="w-full pl-8 pr-4 py-2 border rounded"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Aperta 24 Ore
+              </label>
+              <select
+                value={formData.open24Hours ? 'Si' : 'No'}
+                onChange={(e) => handleInputChange('open24Hours', e.target.value === 'Si')}
+                className="w-full px-4 py-2 border rounded"
+              >
+                <option value="Si">Si</option>
+                <option value="No">No</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <div>
+            <label className="block text-sm font-medium mb-2">
+              Note (x Organizzazione)
+            </label>
+            <textarea
+              value={formData.notes}
+              onChange={(e) => handleInputChange('notes', e.target.value)}
+              className="w-full px-4 py-2 border rounded"
+              rows="4"
+            />
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <p className="text-sm text-gray-500">(*) Campo Obbligatorio</p>
+        </div>
+
+        <div className="mt-6">
+          <Button
+            onClick={() => {
+              if (confirm('Sei sicuro di voler cancellare questa stazione?')) {
+                // Handle delete - will be implemented
+              }
+            }}
+            className="bg-red-600 hover:bg-red-700 text-white"
+          >
+            <TrashIcon className="w-4 h-4 mr-2" />
+            Cancella Stazione
+          </Button>
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
+// Dati OCPP Tab Component
+function DatiOcppTab({ formData, handleInputChange, station }) {
+  const formatDateTime = (date) => {
+    if (!date) return '';
+    try {
+      return format(new Date(date), 'dd/MM/yyyy HH:mm:ss', { locale: it });
+    } catch {
+      return '';
+    }
+  };
+
+  return (
+    <Card>
+      <Card.Body>
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-bold">Dati OCPP</h2>
+          <Button className="bg-blue-600 hover:bg-blue-700 text-white">
+            Comandi
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Left Column - General Station Data */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Nome Logico (OCPP) <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.ocppId}
+                readOnly
+                className="w-full px-4 py-2 border rounded bg-gray-100"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Numero di Serie
+              </label>
+              <input
+                type="text"
+                value={formData.serialNumber}
+                onChange={(e) => handleInputChange('serialNumber', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Numero di Serie Misuratore
+              </label>
+              <input
+                type="text"
+                value={formData.meterSerialNumber}
+                onChange={(e) => handleInputChange('meterSerialNumber', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Ultima Info Comunicata
+              </label>
+              <input
+                type="text"
+                value={formData.lastInfo}
+                onChange={(e) => handleInputChange('lastInfo', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Stato Registrazione <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.registrationStatus}
+                readOnly
+                className={`w-full px-4 py-2 border rounded ${
+                  formData.registrationStatus === 'Accettata' 
+                    ? 'bg-green-50 text-green-800 border-green-200' 
+                    : 'bg-red-50 text-red-800 border-red-200'
+                }`}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Numero di Serie Punto di Ricarica
+              </label>
+              <input
+                type="text"
+                value={formData.stationSerialNumber}
+                onChange={(e) => handleInputChange('stationSerialNumber', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Versione Firmware
+              </label>
+              <input
+                type="text"
+                value={formData.firmwareVersion}
+                onChange={(e) => handleInputChange('firmwareVersion', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Ultimo Errore Comunicato
+              </label>
+              <input
+                type="text"
+                value={formData.lastError}
+                onChange={(e) => handleInputChange('lastError', e.target.value)}
+                className={`w-full px-4 py-2 border rounded ${
+                  formData.lastError !== 'NoError' ? 'bg-red-50 text-red-800 border-red-200' : ''
+                }`}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Stato Stazione di Ricarica
+              </label>
+              <input
+                type="text"
+                value={formData.stationStatus}
+                readOnly
+                className={`w-full px-4 py-2 border rounded ${
+                  formData.stationStatus === 'Disponibile' || formData.stationStatus === 'AVAILABLE'
+                    ? 'bg-green-50 text-green-800 border-green-200'
+                    : 'bg-red-50 text-red-800 border-red-200'
+                }`}
+              />
+            </div>
+          </div>
+
+          {/* Right Column - Station Details */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Marca
+              </label>
+              <input
+                type="text"
+                value={formData.vendor}
+                onChange={(e) => handleInputChange('vendor', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                IccId
+              </label>
+              <input
+                type="text"
+                value={formData.iccId}
+                onChange={(e) => handleInputChange('iccId', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Intervallo Collegamenti
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={formData.connectionIntervalUnit}
+                  onChange={(e) => handleInputChange('connectionIntervalUnit', e.target.value)}
+                  className="w-20 px-4 py-2 border rounded"
+                  placeholder="S."
+                />
+                <input
+                  type="number"
+                  value={formData.connectionInterval}
+                  onChange={(e) => handleInputChange('connectionInterval', e.target.value)}
+                  className="flex-1 px-4 py-2 border rounded"
+                  placeholder="900"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Prodotto
+              </label>
+              <select
+                value={formData.product}
+                onChange={(e) => handleInputChange('product', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              >
+                <option value="Non Specificato">Non Specificato</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Ultimo Ascolto
+              </label>
+              <input
+                type="text"
+                value={formData.lastHeartbeat}
+                readOnly
+                className="w-full px-4 py-2 border rounded bg-gray-100"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Modello
+              </label>
+              <input
+                type="text"
+                value={formData.model}
+                onChange={(e) => handleInputChange('model', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Imsi
+              </label>
+              <input
+                type="text"
+                value={formData.imsi}
+                onChange={(e) => handleInputChange('imsi', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Connection Section */}
+        <div className="mt-8 pt-6 border-t">
+          <h3 className="text-lg font-semibold mb-4">Connessione</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Stato
+              </label>
+              <input
+                type="text"
+                value={formData.connectionStatus}
+                readOnly
+                className={`w-full px-4 py-2 border rounded ${
+                  formData.connectionStatus === 'Connessa'
+                    ? 'bg-green-50 text-green-800 border-green-200'
+                    : 'bg-red-50 text-red-800 border-red-200'
+                }`}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Data
+              </label>
+              <input
+                type="text"
+                value={formData.connectionDate}
+                onChange={(e) => handleInputChange('connectionDate', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+                placeholder="10/05/2025 11:23:44"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Motivo
+              </label>
+              <input
+                type="text"
+                value={formData.connectionReason}
+                onChange={(e) => handleInputChange('connectionReason', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Ip Remoto
+              </label>
+              <input
+                type="text"
+                value={formData.remoteIp}
+                onChange={(e) => handleInputChange('remoteIp', e.target.value)}
+                className="w-full px-4 py-2 border rounded"
+                placeholder="151.19.121.235"
+              />
+            </div>
+          </div>
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
+// Connettori Tab Component
+function ConnettoriTab({ stationId, station, mutateStation }) {
+  const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [connectorFormData, setConnectorFormData] = useState({
+    connectorId: '',
+    attacco: 'Presa', // Presa or Cavo
+    tipo: 'Tipo 2 CCS Combo 2',
+    energia: 'C.C.', // C.C. (DC) or C.A. (AC)
+    potenzaMaxKwh: '',
+    attivo: true,
+    costoRicaricaKwh: '',
+    costoRicaricaOra: '',
+    costoRicaricaKwhRoaming: '',
+    costoRicaricaOraRoaming: '',
+  });
+
+  // Fetch connectors
+  const { data: connectorsData, error: connectorsError, mutate: mutateConnectors } = useSWR(
+    stationId ? `/api/admin/stations/${stationId}/connectors` : null,
+    fetcher
+  );
+
+  const connectors = connectorsData?.data || [];
+
+  const formatCurrency = (amount) => {
+    if (amount === null || amount === undefined || amount === '') return '€ 0.00';
+    const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+    if (isNaN(numAmount)) return '€ 0.00';
+    return new Intl.NumberFormat('it-IT', {
+      style: 'currency',
+      currency: 'EUR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(numAmount);
+  };
+
+  const handleConnectorInputChange = (field, value) => {
+    setConnectorFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleOpenModal = (connector = null) => {
+    if (connector) {
+      setEditingId(connector.id);
+      setConnectorFormData({
+        connectorId: connector.connectorId.toString(),
+        attacco: connector.connectorType?.includes('Cavo') ? 'Cavo' : 'Presa',
+        tipo: connector.connectorType || 'Tipo 2 CCS Combo 2',
+        energia: connector.maxPower && connector.maxPower > 50 ? 'C.C.' : 'C.A.',
+        potenzaMaxKwh: connector.maxPower?.toString() || '',
+        attivo: connector.status === 'AVAILABLE',
+        costoRicaricaKwh: '0.69', // TODO: Get from tariff
+        costoRicaricaOra: '0.00', // TODO: Get from tariff
+        costoRicaricaKwhRoaming: '0.67', // TODO: Get from tariff
+        costoRicaricaOraRoaming: '0.00', // TODO: Get from tariff
+      });
+    } else {
+      setEditingId(null);
+      setConnectorFormData({
+        connectorId: '',
+        attacco: 'Presa',
+        tipo: 'Tipo 2 CCS Combo 2',
+        energia: 'C.C.',
+        potenzaMaxKwh: '',
+        attivo: true,
+        costoRicaricaKwh: '',
+        costoRicaricaOra: '',
+        costoRicaricaKwhRoaming: '',
+        costoRicaricaOraRoaming: '',
+      });
+    }
+    setShowModal(true);
+  };
+
+  const handleCloseModal = () => {
+    setShowModal(false);
+    setEditingId(null);
+  };
+
+  const handleSaveConnector = async (e) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+
+    try {
+      const url = editingId
+        ? `/api/admin/connectors/${editingId}`
+        : `/api/admin/stations/${stationId}/connectors`;
+
+      const method = editingId ? 'PATCH' : 'POST';
+
+      const body = editingId
+        ? {
+            name: connectorFormData.tipo,
+            status: connectorFormData.attivo ? 'AVAILABLE' : 'UNAVAILABLE',
+            maxPower: connectorFormData.potenzaMaxKwh ? parseFloat(connectorFormData.potenzaMaxKwh) : null,
+            connectorType: connectorFormData.tipo,
+          }
+        : {
+            connectorId: parseInt(connectorFormData.connectorId),
+            name: connectorFormData.tipo,
+            maxPower: connectorFormData.potenzaMaxKwh ? parseFloat(connectorFormData.potenzaMaxKwh) : null,
+            connectorType: connectorFormData.tipo,
+            status: connectorFormData.attivo ? 'AVAILABLE' : 'UNAVAILABLE',
+          };
+
+      const response = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+      const result = await response.json();
+
+      if (result.errors) {
+        Object.keys(result.errors).forEach((error) =>
+          toast.error(result.errors[error].msg)
+        );
+      } else {
+        toast.success(editingId ? 'Connettore aggiornato con successo' : 'Connettore creato con successo');
+        mutateConnectors();
+        mutateStation();
+        handleCloseModal();
+      }
+    } catch (error) {
+      toast.error('Errore durante il salvataggio');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteConnector = async (connectorId, connectorName) => {
+    if (!confirm(`Sei sicuro di voler eliminare il connettore "${connectorName}"?`)) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`/api/admin/connectors/${connectorId}`, {
+        method: 'DELETE',
+      });
+
+      const result = await response.json();
+
+      if (result.errors) {
+        Object.keys(result.errors).forEach((error) =>
+          toast.error(result.errors[error].msg)
+        );
+      } else {
+        toast.success('Connettore eliminato con successo');
+        mutateConnectors();
+        mutateStation();
+      }
+    } catch (error) {
+      toast.error('Errore durante l\'eliminazione');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <Card>
+        <Card.Body>
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold">Connettori</h2>
+            <Button
+              onClick={() => handleOpenModal()}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              + Nuovo Connettore
+            </Button>
+          </div>
+
+          {connectorsError ? (
+            <div className="text-red-600">Errore nel caricamento dei connettori</div>
+          ) : connectors.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              Nessun connettore trovato. Aggiungi il primo connettore.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      ID
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Stato
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Attacco
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Tipo
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Energia
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Potenza kWh
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Costi Ricarica
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Costi Ricarica Roaming
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Attivo
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Azioni
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {connectors.map((connector) => {
+                    // Determine attacco type from connectorType
+                    const attacco = connector.connectorType?.includes('Cavo') ? 'Cavo' : 'Presa';
+                    const energia = connector.maxPower && connector.maxPower > 50 ? 'C.C.' : 'C.A.';
+                    
+                    return (
+                      <tr key={connector.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                          {connector.connectorId}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span
+                            className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                              connector.status === 'AVAILABLE'
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-red-100 text-red-800'
+                            }`}
+                          >
+                            {connector.status === 'AVAILABLE' ? 'Disponibile' : connector.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {attacco}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {connector.connectorType || '—'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {energia}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {connector.maxPower ? `${connector.maxPower} kWh` : '—'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          €. 0.69 X kWh, €. 0.00 X Ora
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          €. 0.67 X kWh, €. 0.00 X Ora
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {connector.status === 'AVAILABLE' ? 'Si' : 'No'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                          <button
+                            onClick={() => handleOpenModal(connector)}
+                            className="inline-flex items-center justify-center w-8 h-8 bg-blue-600 text-white rounded hover:bg-blue-700"
+                          >
+                            <PencilIcon className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteConnector(connector.id, connector.name || `Connettore ${connector.connectorId}`)}
+                            disabled={isSubmitting}
+                            className="inline-flex items-center justify-center w-8 h-8 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                          >
+                            <TrashIcon className="w-4 h-4" />
+                          </button>
+                          <Button className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-2 py-1">
+                            Comandi
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card.Body>
+      </Card>
+
+      {/* Connector Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-xl font-bold mb-4">Dettaglio Connettore</h3>
+            <form onSubmit={handleSaveConnector} className="space-y-4">
+              {!editingId && (
+                <div>
+                  <label className="block text-sm font-medium mb-2">
+                    ID <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    value={connectorFormData.connectorId}
+                    onChange={(e) => handleConnectorInputChange('connectorId', e.target.value)}
+                    className="w-full px-4 py-2 border rounded"
+                    required
+                    min="1"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Attacco
+                </label>
+                <select
+                  value={connectorFormData.attacco}
+                  onChange={(e) => handleConnectorInputChange('attacco', e.target.value)}
+                  className="w-full px-4 py-2 border rounded"
+                >
+                  <option value="Presa">Presa</option>
+                  <option value="Cavo">Cavo</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Tipo
+                </label>
+                <select
+                  value={connectorFormData.tipo}
+                  onChange={(e) => handleConnectorInputChange('tipo', e.target.value)}
+                  className="w-full px-4 py-2 border rounded"
+                >
+                  <option value="Tipo 2 CCS Combo 2">Tipo 2 CCS Combo 2</option>
+                  <option value="Tipo 2">Tipo 2</option>
+                  <option value="CHAdeMO">CHAdeMO</option>
+                  <option value="CCS Combo 1">CCS Combo 1</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Energia
+                </label>
+                <select
+                  value={connectorFormData.energia}
+                  onChange={(e) => handleConnectorInputChange('energia', e.target.value)}
+                  className="w-full px-4 py-2 border rounded"
+                >
+                  <option value="C.C.">C.C.</option>
+                  <option value="C.A. MonoFase">C.A. MonoFase</option>
+                  <option value="C.A. TriFase">C.A. TriFase</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Potenza Massima KWh
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={connectorFormData.potenzaMaxKwh}
+                  onChange={(e) => handleConnectorInputChange('potenzaMaxKwh', e.target.value)}
+                  className="w-full px-4 py-2 border rounded"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Attivo
+                </label>
+                <select
+                  value={connectorFormData.attivo ? 'Si' : 'No'}
+                  onChange={(e) => handleConnectorInputChange('attivo', e.target.value === 'Si')}
+                  className="w-full px-4 py-2 border rounded"
+                >
+                  <option value="Si">Si</option>
+                  <option value="No">No</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Costo Ricarica per kWh
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-3 text-gray-500">€.</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={connectorFormData.costoRicaricaKwh}
+                    onChange={(e) => handleConnectorInputChange('costoRicaricaKwh', e.target.value)}
+                    className="w-full pl-8 pr-4 py-2 border rounded"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Costo Ricarica per Ora
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-3 text-gray-500">€.</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={connectorFormData.costoRicaricaOra}
+                    onChange={(e) => handleConnectorInputChange('costoRicaricaOra', e.target.value)}
+                    className="w-full pl-8 pr-4 py-2 border rounded"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Costo Ricarica per kWh (Roaming)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-3 text-gray-500">€.</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={connectorFormData.costoRicaricaKwhRoaming}
+                    onChange={(e) => handleConnectorInputChange('costoRicaricaKwhRoaming', e.target.value)}
+                    className="w-full pl-8 pr-4 py-2 border rounded"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Costo Ricarica per Ora (Roaming)
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-3 text-gray-500">€.</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={connectorFormData.costoRicaricaOraRoaming}
+                    onChange={(e) => handleConnectorInputChange('costoRicaricaOraRoaming', e.target.value)}
+                    className="w-full pl-8 pr-4 py-2 border rounded"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 justify-end mt-6">
+                <Button
+                  type="button"
+                  onClick={handleCloseModal}
+                  className="border border-gray-300 hover:bg-gray-50"
+                >
+                  Annulla
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={isSubmitting || (!editingId && !connectorFormData.connectorId)}
+                  className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Salvataggio...' : 'Conferma'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Mappa Tab Component
+function MappaTab({ station, formData }) {
+  const [mapType, setMapType] = useState('roadmap'); // 'roadmap' or 'satellite'
+
+  // Get coordinates from formData or station
+  const latitude = formData.latitude ? parseFloat(formData.latitude) : (station?.latitude || null);
+  const longitude = formData.longitude ? parseFloat(formData.longitude) : (station?.longitude || null);
+
+  // Google Maps embed URL
+  const getMapUrl = () => {
+    if (!latitude || !longitude) {
+      // Default to center of Italy if no coordinates
+      return `https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d11750170.269645333!2d8.224365218749998!3d41.91007150000001!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x12d4fe82448dd203%3A0xe22cf55c24635e6f!2sItalia!5e0!3m2!1sit!2sit!4v1234567890`;
+    }
+
+    const mapTypeParam = mapType === 'satellite' ? 'k' : 'm';
+    return `https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3000!2d${longitude}!3d${latitude}!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x0%3A0x0!2z${latitude}%2C${longitude}!5e0!3m2!1sit!2sit!4v1234567890`;
+  };
+
+  return (
+    <Card>
+      <Card.Body>
+        <div className="space-y-4">
+          {/* Map Type Tabs */}
+          <div className="flex gap-4 border-b">
+            <button
+              onClick={() => setMapType('roadmap')}
+              className={`px-4 py-2 font-medium text-sm ${
+                mapType === 'roadmap'
+                  ? 'border-b-2 border-blue-600 text-blue-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Mappa
+            </button>
+            <button
+              onClick={() => setMapType('satellite')}
+              className={`px-4 py-2 font-medium text-sm ${
+                mapType === 'satellite'
+                  ? 'border-b-2 border-blue-600 text-blue-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Satellite
+            </button>
+          </div>
+
+          {/* Map Display */}
+          {latitude && longitude ? (
+            <div className="w-full" style={{ height: '600px' }}>
+              <iframe
+                width="100%"
+                height="100%"
+                style={{ border: 0, borderRadius: '8px' }}
+                loading="lazy"
+                allowFullScreen
+                referrerPolicy="no-referrer-when-downgrade"
+                src={getMapUrl()}
+                title="Mappa Stazione di Ricarica"
+              />
+            </div>
+          ) : (
+            <div className="w-full h-96 bg-gray-100 rounded-lg flex items-center justify-center">
+              <div className="text-center">
+                <MapPinIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-600 mb-2">Coordinate non disponibili</p>
+                <p className="text-sm text-gray-500">
+                  Inserisci le coordinate (latitudine e longitudine) nella tab &quot;Ubicazione&quot; per visualizzare la mappa
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Coordinates Info */}
+          {latitude && longitude && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <MapPinIcon className="w-5 h-5 text-blue-600" />
+                <h3 className="font-semibold text-blue-900">Coordinate Stazione</h3>
+              </div>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-600">Latitudine:</span>
+                  <span className="ml-2 font-mono font-medium">{latitude}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Longitudine:</span>
+                  <span className="ml-2 font-mono font-medium">{longitude}</span>
+                </div>
+              </div>
+              <div className="mt-2">
+                <a
+                  href={`https://www.google.com/maps?q=${latitude},${longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-800 text-sm underline"
+                >
+                  Apri in Google Maps →
+                </a>
+              </div>
+            </div>
+          )}
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
+// QR Code Tab Component
+function QrCodeTab({ station }) {
+  const router = useRouter();
+  
+  // Generate QR code URL (using external service)
+  // The QR code will contain a link to the station
+  const stationUrl = typeof window !== 'undefined' 
+    ? `${window.location.origin}/stations/${station?.id || ''}`
+    : '';
+  
+  const qrCodeUrl = stationUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(stationUrl)}`
+    : '';
+
+  const handleDownload = () => {
+    if (!qrCodeUrl) return;
+    
+    const link = document.createElement('a');
+    link.href = qrCodeUrl;
+    link.download = `qr-code-stazione-${station?.id || 'unknown'}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <Card>
+      <Card.Body>
+        <div className="space-y-6">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              QR Code Stazione
+            </h3>
+            <p className="text-sm text-gray-600">
+              Il QR code contiene un link alla pagina della stazione. Puoi scaricarlo e utilizzarlo per identificare la stazione.
+            </p>
+          </div>
+
+          {station?.id ? (
+            <div className="flex flex-col items-center space-y-4">
+              {/* QR Code Display */}
+              <div className="p-4 bg-white border-2 border-gray-200 rounded-lg">
+                {qrCodeUrl ? (
+                  <img
+                    src={qrCodeUrl}
+                    alt="QR Code Stazione"
+                    className="w-64 h-64"
+                  />
+                ) : (
+                  <div className="w-64 h-64 flex items-center justify-center bg-gray-100 rounded">
+                    <p className="text-gray-500">Generazione QR Code...</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Station URL */}
+              <div className="w-full max-w-md">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  URL Stazione
+                </label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={stationUrl}
+                    readOnly
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-sm"
+                  />
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(stationUrl);
+                      toast.success('URL copiato negli appunti');
+                    }}
+                    className="px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  >
+                    Copia
+                  </button>
+                </div>
+              </div>
+
+              {/* Download Button */}
+              <Button
+                onClick={handleDownload}
+                className="flex items-center space-x-2"
+              >
+                <ArrowDownTrayIcon className="w-5 h-5" />
+                <span>Scarica QR Code</span>
+              </Button>
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-gray-500">
+                Caricamento dati stazione...
+              </p>
+            </div>
+          )}
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
+// Logo e Foto Tab Component
+function LogoFotoTab({ station }) {
+  const [logoFile, setLogoFile] = useState(null);
+  const [photoFiles, setPhotoFiles] = useState([]);
+  const [logoPreview, setLogoPreview] = useState(station?.logoUrl || null);
+  const [photoPreviews, setPhotoPreviews] = useState(station?.photoUrls || []);
+
+  const handleLogoChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setLogoFile(file);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setLogoPreview(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handlePhotoChange = (e) => {
+    const files = Array.from(e.target.files || []);
+    const newFiles = [...photoFiles, ...files];
+    setPhotoFiles(newFiles);
+    
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPhotoPreviews((prev) => [...prev, reader.result]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveLogo = () => {
+    setLogoFile(null);
+    setLogoPreview(null);
+  };
+
+  const handleRemovePhoto = (index) => {
+    setPhotoFiles((prev) => prev.filter((_, i) => i !== index));
+    setPhotoPreviews((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleUpload = async () => {
+    // TODO: Implement API upload
+    toast.success('Upload in fase di sviluppo');
+  };
+
+  return (
+    <Card>
+      <Card.Body>
+        <div className="space-y-6">
+          {/* Logo Section */}
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Logo Stazione
+            </h3>
+            <div className="space-y-4">
+              {logoPreview ? (
+                <div className="flex items-center space-x-4">
+                  <div className="relative">
+                    <img
+                      src={logoPreview}
+                      alt="Logo Stazione"
+                      className="w-32 h-32 object-contain border border-gray-300 rounded-lg"
+                    />
+                  </div>
+                  <div className="flex flex-col space-y-2">
+                    <label className="cursor-pointer inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                      <PhotoIcon className="w-5 h-5 mr-2" />
+                      Cambia Logo
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleLogoChange}
+                        className="hidden"
+                      />
+                    </label>
+                    <button
+                      onClick={handleRemoveLogo}
+                      className="inline-flex items-center px-4 py-2 border border-red-300 rounded-md shadow-sm text-sm font-medium text-red-700 bg-white hover:bg-red-50"
+                    >
+                      <XMarkIcon className="w-5 h-5 mr-2" />
+                      Rimuovi Logo
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="cursor-pointer inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                    <PhotoIcon className="w-5 h-5 mr-2" />
+                    Carica Logo
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleLogoChange}
+                      className="hidden"
+                    />
+                  </label>
+                  <p className="mt-2 text-sm text-gray-500">
+                    Formati supportati: JPG, PNG, GIF. Dimensione massima: 5MB
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="border-t border-gray-200 pt-6">
+            {/* Photos Section */}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                Foto Stazione
+              </h3>
+              <div className="space-y-4">
+                {/* Photo Grid */}
+                {photoPreviews.length > 0 && (
+                  <div className="grid grid-cols-3 gap-4">
+                    {photoPreviews.map((preview, index) => (
+                      <div key={index} className="relative group">
+                        <img
+                          src={preview}
+                          alt={`Foto ${index + 1}`}
+                          className="w-full h-32 object-cover border border-gray-300 rounded-lg"
+                        />
+                        <button
+                          onClick={() => handleRemovePhoto(index)}
+                          className="absolute top-2 right-2 p-1 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <XMarkIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Upload Photos Button */}
+                <div>
+                  <label className="cursor-pointer inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                    <PlusIcon className="w-5 h-5 mr-2" />
+                    Aggiungi Foto
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handlePhotoChange}
+                      className="hidden"
+                    />
+                  </label>
+                  <p className="mt-2 text-sm text-gray-500">
+                    Puoi caricare più foto. Formati supportati: JPG, PNG, GIF. Dimensione massima per foto: 10MB
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Upload Button */}
+          {(logoFile || photoFiles.length > 0) && (
+            <div className="pt-4 border-t border-gray-200">
+              <Button onClick={handleUpload} className="w-full">
+                Salva Immagini
+              </Button>
+            </div>
+          )}
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}
+
+// White List Tab Component
+function WhiteListTab({ stationId }) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCards, setSelectedCards] = useState([]);
+  const [isAdding, setIsAdding] = useState(false);
+
+  // TODO: Fetch whitelist cards from API
+  // For now, using empty array
+  const whitelistCards = [];
+
+  const filteredCards = whitelistCards.filter((card) =>
+    card.uid?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    card.name?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const handleAddCard = () => {
+    // TODO: Implement add card to whitelist
+    setIsAdding(true);
+    toast.success('Aggiunta carta in fase di sviluppo');
+    setTimeout(() => setIsAdding(false), 1000);
+  };
+
+  const handleRemoveCard = (cardId) => {
+    // TODO: Implement remove card from whitelist
+    toast.success('Rimozione carta in fase di sviluppo');
+  };
+
+  const handleRemoveSelected = () => {
+    // TODO: Implement remove selected cards
+    toast.success('Rimozione carte selezionate in fase di sviluppo');
+    setSelectedCards([]);
+  };
+
+  return (
+    <Card>
+      <Card.Body>
+        <div className="space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">
+                White List Carte RFID
+              </h3>
+              <p className="text-sm text-gray-600 mt-1">
+                Gestisci le carte RFID autorizzate per questa stazione
+              </p>
+            </div>
+            <Button
+              onClick={handleAddCard}
+              disabled={isAdding}
+              className="flex items-center space-x-2"
+            >
+              <PlusIcon className="w-5 h-5" />
+              <span>Aggiungi Carta</span>
+            </Button>
+          </div>
+
+          {/* Search and Actions */}
+          <div className="flex items-center space-x-4">
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                placeholder="Cerca per UID o nome..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              />
+              <MagnifyingGlassIcon className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" />
+            </div>
+            {selectedCards.length > 0 && (
+              <Button
+                onClick={handleRemoveSelected}
+                className="flex items-center space-x-2 bg-red-600 text-white hover:bg-red-700"
+              >
+                <TrashIcon className="w-5 h-5" />
+                <span>Rimuovi Selezionate ({selectedCards.length})</span>
+              </Button>
+            )}
+          </div>
+
+          {/* Cards Table */}
+          {filteredCards.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <input
+                        type="checkbox"
+                        checked={selectedCards.length === filteredCards.length}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedCards(filteredCards.map((c) => c.id));
+                          } else {
+                            setSelectedCards([]);
+                          }
+                        }}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      UID
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Nome
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Tipo
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Data Aggiunta
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Azioni
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {filteredCards.map((card) => (
+                    <tr key={card.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={selectedCards.includes(card.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedCards((prev) => [...prev, card.id]);
+                            } else {
+                              setSelectedCards((prev) => prev.filter((id) => id !== card.id));
+                            }
+                          }}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900">
+                        {card.uid || 'N/A'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {card.name || 'N/A'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {card.type || 'N/A'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {card.addedAt ? format(new Date(card.addedAt), 'dd/MM/yyyy HH:mm', { locale: it }) : 'N/A'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <button
+                          onClick={() => handleRemoveCard(card.id)}
+                          className="text-red-600 hover:text-red-900 flex items-center"
+                        >
+                          <TrashIcon className="w-4 h-4 mr-1" />
+                          Rimuovi
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center py-12 border border-gray-200 rounded-lg">
+              <UserGroupIcon className="mx-auto h-12 w-12 text-gray-400" />
+              <h3 className="mt-2 text-sm font-medium text-gray-900">
+                Nessuna carta in white list
+              </h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Aggiungi carte RFID alla white list per autorizzarle su questa stazione.
+              </p>
+              <div className="mt-6">
+                <Button
+                  onClick={handleAddCard}
+                  className="flex items-center space-x-2 mx-auto"
+                >
+                  <PlusIcon className="w-5 h-5" />
+                  <span>Aggiungi Carta</span>
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </Card.Body>
+    </Card>
+  );
+}

@@ -68,7 +68,24 @@ const Settings = ({ user }) => {
           );
         } else {
           toast.success('Email successfully updated and signing you out!');
-          setTimeout(() => signOut({ callbackUrl: '/auth/login' }), 2000);
+          // #region agent log
+          try {
+            fetch('http://localhost:7242/ingest/63d3e4d3-5a4a-4343-8839-58d002db9a84', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sessionId: 'debug-session',
+                runId: 'logout',
+                hypothesisId: 'LO3',
+                location: 'src/pages/account/settings.js',
+                message: 'email updated -> signOut',
+                data: { callbackUrl: '/auth/login' },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+          } catch {}
+          // #endregion
+          signOut({ callbackUrl: '/auth/login' });
         }
       });
     }
@@ -235,7 +252,17 @@ const Settings = ({ user }) => {
 
 export const getServerSideProps = async (context) => {
   const session = await getSession(context);
-  const { email, name, userCode } = await getUser(session.user?.userId);
+  const userId = session?.user?.userId || session?.user?.id;
+  if (!userId) {
+    return {
+      redirect: {
+        destination: '/auth/login',
+        permanent: false,
+      },
+    };
+  }
+
+  const { email, name, userCode } = await getUser(userId);
   return {
     props: {
       user: {

@@ -101,17 +101,20 @@ model User {
   email         String?   @unique
   emailVerified DateTime?
   image         String?
+  passwordHash  String?
   createdAt     DateTime? @default(now())
   deletedAt     DateTime?
   updatedAt     DateTime? @updatedAt
 
-  accounts         Account[]
-  sessions         Session[]
-  membership       Member[]         @relation("membership")
-  invitedMembers   Member[]         @relation("inviter")
-  createdWorkspace Workspace[]
-  customerPayment  CustomerPayment?
-  domains          Domain[]
+  accounts                Account[]
+  sessions                Session[]
+  membership              Member[]                    @relation("membership")
+  invitedMembers          Member[]                    @relation("inviter")
+  createdWorkspace        Workspace[]
+  customerPayment         CustomerPayment?
+  domains                 Domain[]
+  changedFeePolicies      WorkspaceFeePolicyHistory[]
+  changedPlatformSettings PlatformSettingsHistory[]
 
   @@unique([userCode, email])
   @@map("users")
@@ -126,6 +129,26 @@ model VerificationToken {
   @@map("verificationTokens")
 }
 
+// Workspace Fee Policy History (audit trail)
+model WorkspaceFeePolicyHistory {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  changedByUserId String // User che ha fatto la modifica
+  changedAt       DateTime @default(now())
+
+  // Audit: valori vecchi e nuovi (JSON)
+  oldValues Json // Snapshot valori precedenti
+  newValues Json // Snapshot valori nuovi
+  reason    String? @db.Text // Motivo modifica (opzionale)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  changedBy User      @relation(fields: [changedByUserId], references: [id])
+
+  @@index([workspaceId])
+  @@index([changedAt])
+  @@map("workspaceFeePolicyHistories")
+}
+
 model Workspace {
   id            String    @id @default(cuid())
   workspaceCode String    @unique @default(cuid())
@@ -137,9 +160,40 @@ model Workspace {
   deletedAt     DateTime?
   updatedAt     DateTime? @updatedAt
 
+  // Super Admin Settings - Economic parameters
+  defaultMsFeePercent       Float?  @default(15.0) // MSolution fee % (0-100)
+  defaultSubCpoSharePercent Float? // Complemento (derivato: 100 - msFeePercent)
+  perSessionStartFeeCents   Int?    @default(0) // Fee apertura sessione (cents)
+  gracePeriodMinutes        Int?    @default(0) // Tolleranza sosta (minuti)
+  overstayFeeCentsPerMinute Int?    @default(0) // Penalty sosta prolungata (cents/min)
+  hubjectPriceOverrides     String? @db.Text // JSON: override prezzi Hubject per EMP
+
+  // Super Admin Settings - Operational parameters
+  isActive         Boolean   @default(true) // Workspace attivo
+  isSuspended      Boolean   @default(false) // Workspace sospeso
+  suspendedAt      DateTime? // Timestamp sospensione
+  suspensionReason String?   @db.Text // Motivo sospensione
+
+  // Sub-CPO public contact info (shown on station info)
+  contactWebsiteUrl String? @db.Text
+  contactEmail      String?
+  contactPhone      String?
+
+  // Workspace branding
+  brandLogoUrl String? @db.Text
+
   creator User     @relation(fields: [creatorId], references: [id], onDelete: Cascade)
   members Member[]
   domains Domain[]
+
+  // MSolution relations
+  chargingStations ChargingStation[]
+  tariffProfiles   TariffProfile[]
+  chargingSessions ChargingSession[]
+  subscriptions    OrganizationSubscription[]
+  payoutStatements PayoutStatement[]
+  feePolicyHistory WorkspaceFeePolicyHistory[]
+  opsEvents        OpsEvent[]
 
   @@unique([workspaceCode, inviteCode])
   @@map("workspaces")
@@ -158,6 +212,846 @@ enum SubscriptionType {
 }
 
 enum TeamRole {
+  READONLY
+  FINANCE
+  TECHNICIAN
+  OPERATOR
   MEMBER
+  ADMIN
   OWNER
+  SUPER_ADMIN // Global MSolution admin (not workspace-specific)
+}
+
+// ============================================
+// MSOLUTION MODELS - Charging Infrastructure
+// ============================================
+
+// Global End User (driver) - NOT tied to workspace
+model EndUser {
+  id          String    @id @default(cuid())
+  endUserCode String    @unique @default(cuid())
+  email       String?   @unique
+  phone       String?
+  name        String?
+  rfidToken   String?   @unique // RFID card token
+  rfidBalanceCents Int  @default(0) // stored-value balance for RFID card (demo/ops)
+  passwordHash String? // End-user login (driver area)
+  billingProfile Json? // JSON fatturazione (ragione sociale, P.IVA, indirizzo, ecc.)
+  consents     Json? // privacy/terms/marketing consents + timestamps
+  preferences  Json? // driver app preferences: language, notifications, mapStyle, etc.
+  status      String    @default("ACTIVE") // ACTIVE, SUSPENDED, DELETED
+  createdAt   DateTime  @default(now())
+  deletedAt   DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  paymentProfile PaymentProfile?
+  sessions       ChargingSession[]
+  cardRecharges  CardRecharge[]
+  favoriteStations    FavoriteStation[]
+  reservations        StationReservation[]
+  voucherRedemptions  VoucherRedemption[]
+  supportTickets      SupportTicket[]
+
+  @@map("endUsers")
+}
+
+// EndUser favorites
+model FavoriteStation {
+  id        String   @id @default(cuid())
+  endUserId String
+  stationId String
+  createdAt DateTime @default(now())
+
+  endUser EndUser         @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+  station ChargingStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  @@unique([endUserId, stationId])
+  @@index([endUserId])
+  @@index([stationId])
+  @@map("favoriteStations")
+}
+
+// Station reservation (15 min typical)
+model StationReservation {
+  id            String   @id @default(cuid())
+  endUserId     String
+  stationId     String
+  connectorId   String?
+  status        String   @default("ACTIVE") // ACTIVE | CANCELLED | EXPIRED | CONSUMED
+  reservedUntil DateTime
+  feeCents      Int      @default(0)
+  currency      String   @default("EUR")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  endUser   EndUser         @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+  station   ChargingStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connector Connector?      @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+
+  @@index([endUserId, status])
+  @@index([stationId, status])
+  @@index([reservedUntil])
+  @@map("stationReservations")
+}
+
+// Voucher codes (wallet top-up)
+model Voucher {
+  code        String   @id
+  amountCents Int
+  currency    String   @default("EUR")
+  isActive    Boolean  @default(true)
+  expiresAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  redemptions VoucherRedemption[]
+
+  @@map("vouchers")
+}
+
+model VoucherRedemption {
+  id          String   @id @default(cuid())
+  code        String
+  endUserId   String
+  amountCents Int
+  currency    String   @default("EUR")
+  createdAt   DateTime @default(now())
+
+  voucher Voucher @relation(fields: [code], references: [code], onDelete: Cascade)
+  endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+
+  @@unique([code, endUserId])
+  @@index([endUserId])
+  @@map("voucherRedemptions")
+}
+
+// Support tickets from driver app
+model SupportTicket {
+  id        String   @id @default(cuid())
+  endUserId String
+  subject   String
+  message   String   @db.Text
+  status    String   @default("OPEN") // OPEN | IN_PROGRESS | CLOSED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+
+  @@index([endUserId])
+  @@index([status])
+  @@map("supportTickets")
+}
+
+// Manual/top-up recharge for an RFID card (stored value)
+model CardRecharge {
+  id            String   @id @default(cuid())
+  endUserId      String
+  cardSerial     String
+  amountCents    Int
+  currency       String  @default("EUR")
+  status         String  @default("COMPLETED") // COMPLETED | FAILED | CANCELLED
+  channel        String  @default("manual") // manual | stripe | pos
+  createdByEmail String?
+  createdByName  String?
+  createdAt      DateTime @default(now())
+
+  endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+
+  @@index([cardSerial])
+  @@index([endUserId])
+  @@map("cardRecharges")
+}
+
+// Payment profile for EndUser (Stripe references only, no card data)
+model PaymentProfile {
+  id                    String   @id @default(cuid())
+  endUserId             String   @unique
+  stripeCustomerId      String?  @unique // Stripe Customer ID
+  stripePaymentMethodId String? // Default payment method ID
+  status                String   @default("ACTIVE") // ACTIVE, INACTIVE
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  endUser EndUser @relation(fields: [endUserId], references: [id], onDelete: Cascade)
+
+  @@map("paymentProfiles")
+}
+
+// Charging Station (tenant-scoped)
+model ChargingStation {
+  id              String        @id @default(cuid())
+  workspaceId     String
+  ocppId          String // OCPP charge point identity
+  name            String
+  location        String? // Address/location
+  latitude        Float?
+  longitude       Float?
+  status          StationStatus @default(AVAILABLE)
+  ocppVersion     String? // OCPP version (1.6J, 2.0.1, etc.)
+  lastHeartbeat   DateTime? // Last OCPP heartbeat timestamp
+  vendor          String? // OCPP vendor (from BootNotification)
+  model           String? // OCPP model (from BootNotification)
+  firmwareVersion String? // OCPP firmware (from BootNotification)
+
+  // Station media + whitelist (simple JSON-backed storage)
+  logoUrl       String?
+  photoUrls     Json?
+  rfidWhitelist Json?
+
+  createdAt       DateTime      @default(now())
+  deletedAt       DateTime?
+  updatedAt       DateTime      @updatedAt
+
+  workspace         Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connectors        Connector[]
+  sessions          ChargingSession[]
+  tariffAssignments TariffAssignment[]
+  subscriptions     OrganizationSubscription[]
+  ocppMessages      OcppMessage[]
+  OpsEvent          OpsEvent[]
+  favoritedBy       FavoriteStation[]
+  reservations      StationReservation[]
+
+  @@unique([workspaceId, ocppId]) // Unique OCPP ID per workspace
+  @@index([workspaceId])
+  @@map("chargingStations")
+}
+
+// Connector (physical charging port on station)
+model Connector {
+  id            String          @id @default(cuid())
+  stationId     String
+  connectorId   Int // OCPP connector ID (1, 2, etc.)
+  name          String?
+  status        ConnectorStatus @default(AVAILABLE)
+  maxPower      Float? // kW max power
+  connectorType String? // Type2, CCS, CHAdeMO, etc.
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  station           ChargingStation    @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  sessions          ChargingSession[]
+  tariffAssignments TariffAssignment[]
+  reservations      StationReservation[]
+
+  @@unique([stationId, connectorId]) // Unique connector per station
+  @@index([stationId])
+  @@map("connectors")
+}
+
+// Tariff Profile (versioned pricing)
+model TariffProfile {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  name            String
+  basePricePerKwh Float // Base price per kWh
+  pricePerMinute  Float?    @default(0) // Optional price per minute
+  sessionStartFee Float?    @default(0) // Optional session start fee
+  currency        String    @default("EUR")
+  msFeePercent    Float // MSolution fee percentage (e.g., 0.15 = 15%)
+  version         Int       @default(1) // Version number
+  isActive        Boolean   @default(true)
+  validFrom       DateTime  @default(now())
+  validUntil      DateTime?
+  createdAt       DateTime  @default(now())
+  deletedAt       DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  workspace   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignments TariffAssignment[]
+  sessions    ChargingSession[] // Sessions using this tariff (snapshot)
+
+  @@index([workspaceId])
+  @@index([workspaceId, isActive])
+  @@map("tariffProfiles")
+}
+
+// Tariff Assignment (links tariff to station/connector with validity dates)
+model TariffAssignment {
+  id          String    @id @default(cuid())
+  tariffId    String
+  stationId   String?
+  connectorId String?
+  validFrom   DateTime  @default(now())
+  validUntil  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tariff    TariffProfile    @relation(fields: [tariffId], references: [id], onDelete: Cascade)
+  station   ChargingStation? @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connector Connector?       @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+
+  @@index([tariffId])
+  @@index([stationId])
+  @@map("tariffAssignments")
+}
+
+// Charging Session (complete transaction with economic breakdown)
+model ChargingSession {
+  id                String  @id @default(cuid())
+  workspaceId       String // Tenant isolation
+  stationId         String
+  connectorId       String
+  endUserId         String?
+  rfidToken         String? // If no endUser linked
+  ocppTransactionId Int?    @unique // OCPP transaction ID
+  ocppIdTag         String? // OCPP idTag
+
+  // Timing
+  startTime       DateTime
+  endTime         DateTime?
+  durationSeconds Int?
+
+  // Energy
+  energyKwh  Float? // kWh delivered
+  meterStart Float? // OCPP meter start
+  meterStop  Float? // OCPP meter stop
+
+  // Status
+  status     SessionStatus      @default(PENDING)
+  stopReason SessionStopReason?
+
+  // Pricing snapshot (immutable - tariff at session time)
+  tariffSnapshotId      String? // TariffProfile used (reference)
+  tariffBasePricePerKwh Float? // Snapshot: base price
+  tariffPricePerMinute  Float? // Snapshot: price per minute
+  tariffSessionStartFee Float? // Snapshot: session start fee
+  tariffMsFeePercent    Float? // Snapshot: MS fee %
+  tariffCurrency        String  @default("EUR")
+  tariffSnapshotJson    String? @db.Text // JSON immutabile completo del tariff snapshot
+
+  // Workspace fee policy snapshot (immutable - policy at session time)
+  workspaceFeePolicySnapshotJson String? @db.Text // JSON immutabile: defaultMsFeePercent, perSessionStartFeeCents, etc.
+
+  // Economic breakdown (calculated)
+  grossAmount         Float? // Total revenue (energyKwh * basePricePerKwh)
+  msFeeAmount         Float? // MSolution fee (grossAmount * msFeePercent / 100)
+  subCpoEarningAmount Float? // Sub-CPO earning (grossAmount - msFeeAmount)
+  netAmount           Float? // Net after VAT (placeholder, same as subCpoEarningAmount for now)
+  currency            String @default("EUR")
+
+  // Billing
+  billingStatus        BillingStatus @default(NOT_BILLED)
+  billingBreakdownJson String?       @db.Text // JSON completo del billing breakdown
+  billedAt             DateTime? // Timestamp when billing was computed
+
+  // Payout (rendicontazione)
+  payoutStatementId String? // Statement che include questa sessione (per evitare duplicati)
+
+  // VAT flags (placeholder for future)
+  vatRate       Float?  @default(0)
+  vatAmount     Float?  @default(0)
+  isVatIncluded Boolean @default(true)
+
+  // Payment (Stripe PaymentIntent with manual capture)
+  paymentStatus           PaymentStatus @default(NONE)
+  stripePaymentIntentId   String?       @unique // Stripe PaymentIntent ID (unique to prevent duplicates)
+  holdAmountCents         Int? // Amount held in cents
+  capturedAmountCents     Int? // Amount captured in cents
+  paymentLastErrorCode    String? // Last Stripe error code
+  paymentLastErrorMessage String?       @db.Text // Last Stripe error message
+  paidAt                  DateTime? // Timestamp when payment was captured
+
+  // Roaming (Hubject OICP)
+  roamingType               RoamingType?   @default(NONE) // NONE | INBOUND | OUTBOUND
+  roamingProvider           String? // HUBJECT
+  hubjectSessionId          String?        @unique // Hubject session ID (idempotency key)
+  empId                     String? // EMP ID (for INBOUND: external driver)
+  cpoId                     String? // CPO ID external (for OUTBOUND: external CPO)
+  roamingTariffSnapshotJson String?        @db.Text // Snapshot tariffa roaming (immutabile)
+  roamingGrossAmount        Float? // Importo gross da Hubject CDR
+  roamingNetAmount          Float? // Importo netto dopo clearing
+  clearingStatus            ClearingStatus @default(PENDING) // PENDING | SETTLED | DISPUTED | CANCELLED
+  clearingReference         String? // Reference clearing Hubject
+  clearingSettledAt         DateTime? // Timestamp settlement
+  clearingDisputeReason     String?        @db.Text // Motivo dispute (se DISPUTED)
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  station         ChargingStation  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connector       Connector        @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  endUser         EndUser?         @relation(fields: [endUserId], references: [id], onDelete: SetNull)
+  tariffSnapshot  TariffProfile?   @relation(fields: [tariffSnapshotId], references: [id])
+  payoutLineItems PayoutLineItem[]
+  opsEvents       OpsEvent[]
+
+  @@unique([stationId, ocppTransactionId]) // Unique transaction per station
+  @@index([workspaceId])
+  @@index([stationId])
+  @@index([endUserId])
+  @@index([status])
+  @@index([startTime])
+  @@index([paymentStatus])
+  @@index([stripePaymentIntentId]) // Index for Stripe webhook lookups
+  @@index([workspaceId, status, startTime]) // Composite index for revenue dashboard queries
+  @@index([payoutStatementId]) // Index for payout queries
+  @@index([workspaceId, billingStatus, billedAt]) // Composite index for payout statement generation
+  @@index([workspaceId, paymentStatus, paidAt]) // Composite index for payout (only CAPTURED)
+  @@index([hubjectSessionId]) // Index for Hubject CDR matching
+  @@index([roamingType, clearingStatus]) // Index for roaming filters
+  @@index([workspaceId, roamingType, clearingStatus]) // Composite index for payout roaming filters
+  @@map("chargingSessions")
+}
+
+// Subscription Plan (template, global MSolution)
+model SubscriptionPlan {
+  id                   String   @id @default(cuid())
+  planCode             String   @unique
+  name                 String
+  description          String?
+  monthlyFeePerStation Float // Monthly fee per station (EUR)
+  currency             String   @default("EUR")
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  subscriptions OrganizationSubscription[]
+
+  @@map("subscriptionPlans")
+}
+
+// Organization Subscription (canone per workspace)
+model OrganizationSubscription {
+  id          String             @id @default(cuid())
+  workspaceId String
+  planId      String
+  stationId   String? // If null, applies to all workspace stations
+  status      SubscriptionStatus @default(ACTIVE)
+  activeFrom  DateTime           @default(now())
+  activeUntil DateTime?
+  monthlyFee  Float // Snapshot of plan fee at subscription time
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plan      SubscriptionPlan @relation(fields: [planId], references: [id])
+  station   ChargingStation? @relation(fields: [stationId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([status])
+  @@map("organizationSubscriptions")
+}
+
+// Payout Statement (rendiconto periodico per workspace)
+model PayoutStatement {
+  id          String       @id @default(cuid())
+  workspaceId String
+  periodStart DateTime
+  periodEnd   DateTime
+  status      PayoutStatus @default(DRAFT)
+
+  // Totals
+  totalSessions      Int    @default(0)
+  totalEnergyKwh     Float  @default(0)
+  totalGrossAmount   Float  @default(0)
+  totalMsFeeAmount   Float  @default(0)
+  totalSubCpoEarning Float  @default(0)
+  currency           String @default("EUR")
+
+  // Payout
+  payoutAmount    Float? // Final payout amount
+  payoutDate      DateTime?
+  payoutReference String? // Bank transfer reference
+
+  // Metadata
+  createdAt   DateTime  @default(now())
+  finalizedAt DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  lineItems PayoutLineItem[]
+
+  // Fee policy snapshot (immutable - policy used for this statement)
+  feePolicySnapshotJson String? @db.Text // JSON: snapshot policy media delle sessioni incluse
+
+  @@unique([workspaceId, periodStart, periodEnd]) // One statement per period per workspace
+  @@index([workspaceId])
+  @@index([status])
+  @@map("payoutStatements")
+}
+
+// Payout Line Item (session included in statement)
+model PayoutLineItem {
+  id          String @id @default(cuid())
+  statementId String
+  sessionId   String @unique
+
+  // Session data snapshot
+  sessionStartTime DateTime
+  stationName      String
+  energyKwh        Float
+  grossAmount      Float
+  msFeeAmount      Float
+  subCpoEarning    Float
+  currency         String   @default("EUR")
+
+  createdAt DateTime @default(now())
+
+  statement PayoutStatement @relation(fields: [statementId], references: [id], onDelete: Cascade)
+  session   ChargingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([statementId])
+  @@map("payoutLineItems")
+}
+
+// Enums for MSolution
+enum StationStatus {
+  AVAILABLE
+  CHARGING
+  UNAVAILABLE
+  FAULTED
+  OFFLINE
+  PREPARING
+}
+
+enum ConnectorStatus {
+  AVAILABLE
+  OCCUPIED
+  UNAVAILABLE
+  FAULTED
+  FINISHING
+  RESERVED
+}
+
+enum SessionStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum SessionStopReason {
+  LOCAL
+  REMOTE
+  EV_DISCONNECTED
+  HARD_RESET
+  SOFT_RESET
+  DE_AUTHORIZED
+  ENERGY_LIMIT_REACHED
+  EMERGENCY_STOP
+  OTHER
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+  EXPIRED
+}
+
+enum PayoutStatus {
+  DRAFT
+  ISSUED // Alias for FINALIZED (issued to Sub-CPO)
+  FINALIZED // Deprecated, use ISSUED
+  PAID
+  CANCELLED
+}
+
+enum BillingStatus {
+  NOT_BILLED
+  BILLED
+  BILLING_ERROR
+}
+
+enum PaymentStatus {
+  NONE // No payment attempted
+  HOLD_PENDING // HOLD request sent to Stripe
+  HOLD_OK // HOLD successful, ready for capture
+  CAPTURE_PENDING // Capture request sent to Stripe
+  CAPTURED // Payment captured successfully (eligible for payout)
+  FAILED // Payment failed (HOLD or capture)
+  PARTIAL_FAILED // Partial capture (amount > hold)
+  WRITE_OFF // Written off by admin (excluded from payout)
+}
+
+// Roaming types
+enum RoamingType {
+  NONE // No roaming (local session)
+  INBOUND // Driver external (EMP) → MSolution station
+  OUTBOUND // Driver MSolution → External CPO station
+}
+
+// Clearing status for roaming sessions
+enum ClearingStatus {
+  PENDING // Waiting for CDR/settlement from Hubject
+  SETTLED // Clearing completed, match OK
+  DISPUTED // Mismatch detected, requires manual intervention
+  CANCELLED // Session cancelled, no clearing
+}
+
+// OCPP Message Log (audit trail for all OCPP messages)
+model OcppMessage {
+  id                  String   @id @default(cuid())
+  direction           String // "IN" (from station) or "OUT" (to station)
+  action              String // OCPP action (BootNotification, Heartbeat, etc.)
+  messageId           String? // OCPP message ID (UUID)
+  chargePointIdentity String? // OCPP charge point identity
+  payload             String   @db.Text // Full JSON payload
+  stationId           String? // ChargingStation ID (if station found)
+  createdAt           DateTime @default(now())
+
+  station ChargingStation? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+
+  @@index([stationId])
+  @@index([direction])
+  @@index([action])
+  @@index([chargePointIdentity])
+  @@index([createdAt])
+  @@map("ocppMessages")
+}
+
+// ============================================
+// PLATFORM SETTINGS (Super Admin Configuration)
+// ============================================
+
+// Platform Settings (singleton - only one record)
+model PlatformSettings {
+  id      String @id @default(cuid())
+  version Int    @default(1) // Version number for optimistic locking
+
+  // Stripe Settings
+  stripeMode             String? @default("TEST") // TEST | LIVE
+  stripeSecretKey        String? @db.Text // Encrypted in production
+  stripePublishableKey   String? @db.Text
+  stripeWebhookSecret    String? @db.Text
+  defaultHoldAmountCents Int?    @default(5000) // Default hold amount (50 EUR)
+  currency               String? @default("EUR")
+
+  // Hubject / OICP Settings
+  hubjectEnvironment       String? // TEST | PROD
+  hubjectOperatorId        String? // CPO ID
+  hubjectEMPId             String?
+  hubjectApiKey            String?  @db.Text // Or certificate reference
+  clearingTolerancePercent Float?   @default(5.0) // 5% tolerance
+  clearingToleranceKwh     Float?   @default(0.5) // 0.5 kWh tolerance
+  inboundEnabled           Boolean? @default(true)
+  outboundEnabled          Boolean? @default(true)
+
+  // Google Services
+  googleMapsApiKey   String?  @db.Text
+  defaultMapCenter   String? // "lat,lng"
+  defaultZoom        Int?     @default(10)
+  mapStyle           String?  @db.Text // JSON style config
+  recaptchaEnabled   Boolean? @default(false)
+  recaptchaSiteKey   String?  @db.Text
+  recaptchaSecretKey String?  @db.Text
+  recaptchaThreshold Float?   @default(0.5)
+
+  // Invoicing Services
+  invoicingProvider      String? @default("NONE") // NONE | INTERNAL | EXTERNAL
+  providerApiKey         String? @db.Text
+  providerEndpoint       String?
+  companyFiscalData      String? @db.Text // JSON: { piva, ragioneSociale, indirizzo }
+  invoiceNumberingPolicy String? // SEQUENTIAL | YEAR_SEQUENTIAL | UUID
+  vatRates               String? @db.Text // JSON: { "standard": 22, "reduced": 10 }
+
+  // Security & Platform Guards
+  enable2FA             Boolean? @default(false)
+  passwordPolicy        String?  @db.Text // JSON: { minLength, requireUppercase, etc }
+  maxLoginAttempts      Int?     @default(5)
+  ipBlockThreshold      Int?     @default(10)
+  internalServiceTokens String?  @db.Text // JSON array of tokens (rotated)
+  allowedWebhookIPs     String?  @db.Text // JSON array of IPs
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  history PlatformSettingsHistory[]
+
+  @@map("platformSettings")
+}
+
+// Platform Settings History (audit trail)
+model PlatformSettingsHistory {
+  id              String   @id @default(cuid())
+  settingsId      String
+  changedByUserId String
+  changedAt       DateTime @default(now())
+
+  // Audit: valori vecchi e nuovi (JSON)
+  oldValues Json // Snapshot valori precedenti
+  newValues Json // Snapshot valori nuovi
+  reason    String? @db.Text // Motivo modifica (opzionale)
+
+  settings  PlatformSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+  changedBy User             @relation(fields: [changedByUserId], references: [id])
+
+  @@index([settingsId])
+  @@index([changedAt])
+  @@index([changedByUserId])
+  @@map("platformSettingsHistories")
+}
+
+// ============================================
+// OPERATIONS & MONITORING (STEP 12)
+// ============================================
+
+// Operations Alert
+model OpsAlert {
+  id            String        @id @default(cuid())
+  alertType     String // STATION_OFFLINE, SESSION_STUCK, PAYMENT_FAILED, etc.
+  severity      AlertSeverity @default(WARN) // INFO | WARN | CRITICAL
+  status        AlertStatus   @default(OPEN) // OPEN | ACK | RESOLVED
+  title         String
+  message       String        @db.Text
+  context       Json? // Additional context (stationId, sessionId, etc.)
+  resourceId    String? // ID of the resource (station, session, etc.)
+  resourceType  String? // STATION | SESSION | PAYMENT | ROAMING | OCPP
+  correlationId String? // Correlation ID for event linking
+
+  // Deduplication
+  dedupeKey String? @unique // Key for deduplication (alertType:resourceId:hash)
+
+  // Timestamps
+  firstSeenAt    DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+  acknowledgedBy String? // User ID
+  resolvedBy     String? // User ID
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events     OpsEvent[]
+  incident   OpsIncident? @relation(fields: [incidentId], references: [id])
+  incidentId String?
+
+  @@index([alertType])
+  @@index([severity])
+  @@index([status])
+  @@index([resourceId, resourceType])
+  @@index([correlationId])
+  @@index([firstSeenAt])
+  @@index([status, severity])
+  @@map("opsAlerts")
+}
+
+// Operations Event (timeline events)
+model OpsEvent {
+  id            String        @id @default(cuid())
+  eventType     String // STATION_REBOOT, SESSION_FORCED_CLOSE, PAYMENT_FAILED, etc.
+  severity      EventSeverity @default(INFO) // INFO | WARN | ERROR | CRITICAL
+  title         String
+  message       String        @db.Text
+  context       Json? // Additional context
+  resourceId    String? // ID of the resource
+  resourceType  String? // STATION | SESSION | PAYMENT | ROAMING | OCPP
+  correlationId String? // Correlation ID for event linking
+
+  // User action tracking
+  userId    String? // User who triggered the event (if manual)
+  userEmail String? // User email (snapshot)
+
+  // Related resources
+  stationId   String?
+  sessionId   String?
+  workspaceId String?
+
+  createdAt DateTime @default(now())
+
+  alert   OpsAlert? @relation(fields: [alertId], references: [id])
+  alertId String?
+
+  station   ChargingStation? @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  session   ChargingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  workspace Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([eventType])
+  @@index([severity])
+  @@index([resourceId, resourceType])
+  @@index([correlationId])
+  @@index([stationId])
+  @@index([sessionId])
+  @@index([workspaceId])
+  @@index([createdAt])
+  @@map("opsEvents")
+}
+
+// Operations Incident (grouped alerts/events)
+model OpsIncident {
+  id          String           @id @default(cuid())
+  title       String
+  description String           @db.Text
+  status      IncidentStatus   @default(OPEN) // OPEN | INVESTIGATING | RESOLVED | CLOSED
+  severity    IncidentSeverity @default(MEDIUM) // LOW | MEDIUM | HIGH | CRITICAL
+
+  // Root cause
+  rootCause  String? @db.Text
+  resolution String? @db.Text
+
+  // Timestamps
+  startedAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  closedAt   DateTime?
+
+  // Assignment
+  assignedTo      String? // User ID
+  assignedToEmail String? // User email (snapshot)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  alerts OpsAlert[]
+
+  @@index([status])
+  @@index([severity])
+  @@index([startedAt])
+  @@map("opsIncidents")
+}
+
+// Kill Switch & Safe Modes (global platform controls)
+model OpsKillSwitch {
+  id                 String    @id @default(cuid())
+  switchType         String    @unique // paymentsEnabled | roamingEnabled | newSessionsEnabled
+  enabled            Boolean   @default(true)
+  reason             String?   @db.Text
+  activatedBy        String? // User ID
+  activatedByEmail   String? // User email (snapshot)
+  activatedAt        DateTime?
+  deactivatedAt      DateTime?
+  deactivatedBy      String? // User ID
+  deactivatedByEmail String? // User email (snapshot)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("opsKillSwitches")
+}
+
+// Enums for Operations
+enum AlertSeverity {
+  INFO
+  WARN
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACK
+  RESOLVED
+}
+
+enum EventSeverity {
+  INFO
+  WARN
+  ERROR
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  CLOSED
+}
+
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
 }

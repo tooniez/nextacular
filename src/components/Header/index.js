@@ -23,7 +23,31 @@ const Header = () => {
     const result = confirm('Are you sure you want to logout?');
 
     if (result) {
-      signOut({ callbackUrl: '/' });
+      // #region agent log
+      try {
+        fetch('http://localhost:7242/ingest/63d3e4d3-5a4a-4343-8839-58d002db9a84', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'debug-session',
+            runId: 'logout',
+            hypothesisId: 'LO1',
+            location: 'src/components/Header/index.js',
+            message: 'platform logout requested',
+            data: { hasSession: Boolean(data?.user) },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+      } catch {}
+      // #endregion
+
+      // Clear possible Driver session too (avoid mixed auth state)
+      try {
+        fetch('/api/driver/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      } catch {}
+
+      // Always land on the unified login page
+      signOut({ callbackUrl: '/auth/login' });
     }
   };
 
