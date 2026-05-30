@@ -32,7 +32,7 @@
     "@stripe/stripe-js": "^1.54.2",
     "date-fns": "^2.30.0",
     "i18next": "^23.16.8",
-    "next": "^13.5.11",
+    "next": "^16.2.6",
     "next-auth": "^4.24.14",
     "next-themes": "^0.2.1",
     "nodemailer": "^7.0.7",
