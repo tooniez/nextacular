@@ -35,7 +35,7 @@
     "next": "^13.5.11",
     "next-auth": "^4.24.14",
     "next-themes": "^0.2.1",
-    "nodemailer": "^7.0.7",
+    "nodemailer": "^9.0.1",
     "nprogress": "^0.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
